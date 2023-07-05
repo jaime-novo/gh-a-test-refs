@@ -1,0 +1,93 @@
+---
+name: Open PR in infra repository
+on:
+  workflow_dispatch:
+    inputs:
+      NewTag:
+        description: 'New value for the Tag property'
+        type: string
+        required: true
+
+
+env:
+  DEPLOYMENT_ACCOUNT: dev
+  DEPLOYMENT_STAGE: dev
+  PROPERTY_PATH: account-service.dev.image-tag
+  SERVICE_RELATIVE_PATH: ms-account-service/ms_config.yaml
+
+jobs:
+
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the current repository, to do the artifact building
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+        
+      # Once the checkout is done, do the building of the artifact
+      - name: Build Artifact
+        run: |
+          echo "Building artifact"
+          echo "Artifact built"
+        shell: bash
+
+
+      # Start by checking out the infra repository
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          repository: 'jaime-novo/gh-a-tests-builder'
+          ref: main
+          token: ${{ secrets.PERSONAL_TOKEN }}
+          path: infrastructure
+
+
+      - id: prep-artifacts
+        name: Setup artifact update
+        shell: bash
+        env:
+          TAG_ID: ${{ github.event.inputs.NewTag }}
+        run: |
+          echo "Finding deployment files in account: ${DEPLOYMENT_ACCOUNT}"
+          # Use a temporary location to store the YAML holding the artifacts
+          tmp_file=$(mktemp)
+
+          property_value="654"
+          
+          find "infrastructure/${DEPLOYMENT_ACCOUNT}" -path "*/${SERVICE_RELATIVE_PATH}" > "$tmp_file"
+          
+          json_file="{"
+          
+          while IFS= read -r file; do
+            json_file+="\"$file\":{\"${PROPERTY_PATH}\":\"${TAG_ID}\"},"
+          done < "$tmp_file"
+          
+          json_file="${json_file%,}"
+          json_file+="}"
+          
+          echo "update_data=$json_file" >> "$GITHUB_OUTPUT"
+
+
+      - id: update-yaml
+        name: Update artifacts reference
+        uses: fjogeleit/yaml-update-action@v0.13.1
+        with:
+          format: YAML
+          method: update
+          changes: ${{ steps.prep-artifacts.outputs.update_data }}
+          commitChange: false
+          createPR: false
+
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v3
+        with:
+          token: ${{ secrets.PERSONAL_TOKEN }}
+          path: infrastructure/
+          commit-message: 'Updating ${{ env.SERVICE_NAME }} artifacts'
+          title: 'Update ${{ env.SERVICE_NAME }} artifacts - ${{ env.DEPLOYMENT_ACCOUNT}}'
+          body: 'Based on the commit ${{ github.sha }}, branch ${{ github.ref }}'
+          branch: 'feature/update-${{ github.event.repository.name }}-${{ github.ref }}'
+          delete-branch: true
+          base: 'main'
